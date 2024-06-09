@@ -8,6 +8,7 @@ from .cbo import CBO
 # Constants
 SYNCHRONIZATION_INTERVAL: int = 50
 VERBOSE: bool = True
+SYNCHRONIZATION_METHOD: str = 'mean'
 
 
 class DistributedCBO:
@@ -15,6 +16,7 @@ class DistributedCBO:
         self,
         num_parallel_dynamics: int,
         synchronization_interval: int = SYNCHRONIZATION_INTERVAL,
+        synchronization_method: str = SYNCHRONIZATION_METHOD,
         verbose: bool = VERBOSE,
         **kwargs
     ) -> None:
@@ -25,8 +27,16 @@ class DistributedCBO:
         self._num_steps = 0
         self._num_synchronizations = 0
 
+        self._sync_methods = {
+            'mean': self._synchronize_mean,
+            # TODO: weighted mean, ...
+        }
 
-    def _synchronize(self) -> None:
+        assert synchronization_method in self._sync_methods, f"Invalid synchronization method: {synchronization_method}"
+        self.synchronization_method = self._sync_methods[synchronization_method]
+
+
+    def _synchronize_mean(self) -> None:
         best_particles = np.array([dynamic.best_particle for dynamic in self.dynamics])
 
         consensus_point = np.mean(best_particles, axis=0)
@@ -36,6 +46,9 @@ class DistributedCBO:
             dynamic.drift = dynamic.x - dynamic.consensus
             dynamic.x = dynamic.x - dynamic.correction(dynamic.lamda * dynamic.dt * dynamic.drift) + dynamic.sigma * dynamic.noise()
 
+    
+    def _synchronize(self) -> None:
+        self.synchronization_method()
 
     
     def _optimize_instance(self, dynamic: CBO) -> CBO:
@@ -69,8 +82,7 @@ class DistributedCBO:
             print(f"DistCBO: Optimization finished after {self._num_steps} steps. Synchronized {self._num_synchronizations} times.")
             print(f"DistCBO: Best particle: {best_particle}, best energy: {best_energy}")
 
-        return best_particle
-        
+        return best_particle 
 
 
     def best_particle(self) -> np.ndarray:
