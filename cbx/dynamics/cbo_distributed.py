@@ -41,19 +41,22 @@ class DistributedCBO:
         self.synchronization_method = self._sync_methods[synchronization_method]
 
 
-    def _synchronize_mean(self) -> None:
-        best_particles = np.array([dynamic.best_particle for dynamic in self.dynamics])
+    def _synchronize_mean(self, current_futures: List[Future], all_futures: List[Future]) -> None:
+        # Waits for all of them to complete
+        wait(all_futures)
 
+        best_particles = np.array([dyn.best_particle for dyn in self.dynamics])
         consensus_point = np.mean(best_particles, axis=0)
 
+        # Update all dynamics with the global consensus point
         for dynamic in self.dynamics:
             dynamic.consensus = consensus_point[None, :]
             dynamic.drift = dynamic.x - dynamic.consensus
             dynamic.x = dynamic.x - dynamic.correction(dynamic.lamda * dynamic.dt * dynamic.drift) + dynamic.sigma * dynamic.noise()
 
     
-    def _synchronize(self) -> None:
-        self.synchronization_method()
+    def _synchronize(self, current_futures: List[Future], all_futures: List[Future]) -> None:
+        self.synchronization_method(current_futures, all_futures)
 
     
     def _optimize_instance(self, dynamic: CBO) -> CBO:
@@ -63,6 +66,8 @@ class DistributedCBO:
 
 
     def optimize(self, num_steps: int) -> None:
+        all_futures = []
+        current_futures = []
         with ThreadPoolExecutor(max_workers=len(self.dynamics)) as executor:
             for _ in range(num_steps):
                 if self.early_stopping_criterion(self.dynamics):
@@ -70,19 +75,16 @@ class DistributedCBO:
                         print("DistCBO: Early stopping criterion met.")
                     break
                 futures = [executor.submit(self._optimize_instance, dynamic) for dynamic in self.dynamics]
+                current_futures = futures
+                all_futures.extend(futures)
                 self._num_steps += 1
 
                 if self._num_steps % self.synchronization_interval == 0:
                     if self.verbose:
                         print(f"DistCBO: Synchronizing at step {self._num_steps}")
-                    
-                    # Waits for all of them to complete
-                    completed_futures = list(as_completed(futures))
-                    
-                    for future in completed_futures:
-                        dyn = future.result()   # Nothing to do with result for now
 
-                    self._synchronize()
+                    self._synchronize(current_futures, all_futures)
+                    all_futures = []
                     self._num_synchronizations += 1
 
         best_particle = self.best_particle()
