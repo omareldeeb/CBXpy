@@ -1,29 +1,26 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait, Future
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 import numpy as np
 
 from .cbo import CBO
 
 
-# Constants
-SYNCHRONIZATION_INTERVAL: int = 50
-VERBOSE: bool = True
-SYNCHRONIZATION_METHOD: str = 'mean'
-# Stop early if all particles are done
-EARLY_STOPPING_CRITERION: Callable[[CBO], bool] = lambda dynamics: all([dyn.terminate() for dyn in dynamics])
-
-
 class DistributedCBO:
     def __init__(
         self,
         num_agent_batches: int,
-        synchronization_interval: int = SYNCHRONIZATION_INTERVAL,
-        synchronization_method: str = SYNCHRONIZATION_METHOD,
-        early_stopping_criterion: Callable[[CBO], bool] = EARLY_STOPPING_CRITERION,
-        verbose: bool = VERBOSE,
+        synchronization_interval: Optional[int] = 50,
+        synchronization_method: str = 'mean',
+        synchronization_criterion: str = 'interval',
+        early_stopping_criterion: Callable[[CBO], bool] = None,
+        verbose: bool = True,
         **kwargs
     ) -> None:
+        if early_stopping_criterion is None:
+            # Stop early if all particles are done
+            early_stopping_criterion = lambda dynamics: all([dyn.terminate() for dyn in dynamics])
+
         self.dynamics = [CBO(batch_args=None, M=1, **kwargs) for _ in range(num_agent_batches)]
         self.synchronization_interval = synchronization_interval
         self.early_stopping_criterion = early_stopping_criterion
@@ -34,35 +31,17 @@ class DistributedCBO:
 
         self._sync_methods = {
             'mean': self._synchronize_mean,
+            'running_mean': self._synchronize_running_mean,
             # TODO: weighted mean, ...
         }
-
         assert synchronization_method in self._sync_methods, f"Invalid synchronization method: {synchronization_method}"
-        self.synchronization_method = self._sync_methods[synchronization_method]
+        self._synchronize = self._sync_methods[synchronization_method]
 
-
-    def _synchronize_mean(self, current_futures: List[Future], all_futures: List[Future]) -> None:
-        # Waits for all of them to complete
-        wait(all_futures)
-
-        best_particles = np.array([dyn.best_particle for dyn in self.dynamics])
-        consensus_point = np.mean(best_particles, axis=0)
-
-        # Update all dynamics with the global consensus point
-        for dynamic in self.dynamics:
-            dynamic.consensus = consensus_point[None, :]
-            dynamic.drift = dynamic.x - dynamic.consensus
-            dynamic.x = dynamic.x - dynamic.correction(dynamic.lamda * dynamic.dt * dynamic.drift) + dynamic.sigma * dynamic.noise()
-
-    
-    def _synchronize(self, current_futures: List[Future], all_futures: List[Future]) -> None:
-        self.synchronization_method(current_futures, all_futures)
-
-    
-    def _optimize_instance(self, dynamic: CBO) -> CBO:
-        dynamic.step()
-
-        return dynamic
+        self._sync_criterions = {
+            'interval': self._interval_synchronization,
+        }
+        assert synchronization_criterion in self._sync_criterions, f"Invalid synchronization criterion: {synchronization_criterion}"
+        self._synchronization_criterion = self._sync_criterions[synchronization_criterion]
 
 
     def optimize(self, num_steps: int) -> None:
@@ -79,13 +58,13 @@ class DistributedCBO:
                 all_futures.extend(futures)
                 self._num_steps += 1
 
-                if self._num_steps % self.synchronization_interval == 0:
+                if self._synchronization_criterion():
                     if self.verbose:
                         print(f"DistCBO: Synchronizing at step {self._num_steps}")
 
                     self._synchronize(current_futures, all_futures)
-                    all_futures = []
                     self._num_synchronizations += 1
+                    all_futures = []
 
         best_particle = self.best_particle()
         best_energy = self.best_energy()
@@ -108,6 +87,33 @@ class DistributedCBO:
         best_energy = np.array([dynamic.best_energy for dynamic in self.dynamics])
 
         return np.min(best_energy)
+    
+
+    def _optimize_instance(self, dynamic: CBO) -> CBO:
+        dynamic.step()
+
+        return dynamic
 
 
-            
+    def _synchronize_mean(self, current_futures: List[Future], all_futures: List[Future]) -> None:
+        # Waits for all of them to complete
+        wait(all_futures)
+
+        best_particles = np.array([dyn.best_particle for dyn in self.dynamics])
+        consensus_point = np.mean(best_particles, axis=0)
+
+        # Update all dynamics with the global consensus point
+        for dynamic in self.dynamics:
+            dynamic.consensus = consensus_point[None, :]
+            dynamic.drift = dynamic.x - dynamic.consensus
+            dynamic.x = dynamic.x - dynamic.correction(dynamic.lamda * dynamic.dt * dynamic.drift) + dynamic.sigma * dynamic.noise()
+
+
+    def _synchronize_running_mean(self, current_futures: List[Future], all_futures: List[Future]) -> None:
+        raise NotImplementedError("Running mean synchronization not implemented yet.")
+    
+
+    def _interval_synchronization(self, **kwargs) -> bool:
+        assert self.synchronization_interval is not None and self.synchronization_interval > 0, "Invalid synchronization interval"
+
+        return self._num_steps % self.synchronization_interval == 0
