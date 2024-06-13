@@ -14,13 +14,13 @@ SYNCHRONIZATION_METHOD: str = 'mean'
 class DistributedCBO:
     def __init__(
         self,
-        num_parallel_dynamics: int,
+        num_agent_batches: int,
         synchronization_interval: int = SYNCHRONIZATION_INTERVAL,
         synchronization_method: str = SYNCHRONIZATION_METHOD,
         verbose: bool = VERBOSE,
         **kwargs
     ) -> None:
-        self.dynamics = [CBO(batch_args=None, M=1, **kwargs) for _ in range(num_parallel_dynamics)]
+        self.dynamics = [CBO(batch_args=None, M=1, **kwargs) for _ in range(num_agent_batches)]
         self.synchronization_interval = synchronization_interval
         self.verbose = verbose
 
