@@ -1,4 +1,5 @@
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, Future
+from typing import Callable, List
 
 import numpy as np
 
@@ -9,6 +10,8 @@ from .cbo import CBO
 SYNCHRONIZATION_INTERVAL: int = 50
 VERBOSE: bool = True
 SYNCHRONIZATION_METHOD: str = 'mean'
+# Stop early if all particles are done
+EARLY_STOPPING_CRITERION: Callable[[CBO], bool] = lambda dynamics: all([dyn.terminate() for dyn in dynamics])
 
 
 class DistributedCBO:
@@ -17,11 +20,13 @@ class DistributedCBO:
         num_agent_batches: int,
         synchronization_interval: int = SYNCHRONIZATION_INTERVAL,
         synchronization_method: str = SYNCHRONIZATION_METHOD,
+        early_stopping_criterion: Callable[[CBO], bool] = EARLY_STOPPING_CRITERION,
         verbose: bool = VERBOSE,
         **kwargs
     ) -> None:
         self.dynamics = [CBO(batch_args=None, M=1, **kwargs) for _ in range(num_agent_batches)]
         self.synchronization_interval = synchronization_interval
+        self.early_stopping_criterion = early_stopping_criterion
         self.verbose = verbose
 
         self._num_steps = 0
@@ -60,6 +65,10 @@ class DistributedCBO:
     def optimize(self, num_steps: int) -> None:
         with ThreadPoolExecutor(max_workers=len(self.dynamics)) as executor:
             for _ in range(num_steps):
+                if self.early_stopping_criterion(self.dynamics):
+                    if self.verbose:
+                        print("DistCBO: Early stopping criterion met.")
+                    break
                 futures = [executor.submit(self._optimize_instance, dynamic) for dynamic in self.dynamics]
                 self._num_steps += 1
 
@@ -81,6 +90,7 @@ class DistributedCBO:
         if self.verbose:
             print(f"DistCBO: Optimization finished after {self._num_steps} steps. Synchronized {self._num_synchronizations} times.")
             print(f"DistCBO: Best particle: {best_particle}, best energy: {best_energy}")
+            print(f"DistCBO: Number of function evaluations: {[dyn.num_f_eval for dyn in self.dynamics]}")
 
         return best_particle 
 
