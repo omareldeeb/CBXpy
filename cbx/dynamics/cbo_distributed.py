@@ -12,6 +12,7 @@ class DistributedCBO:
         num_agent_batches: int,
         synchronization_interval: Optional[int] = 50,
         synchronization_method: str = 'mean',
+        alpha: float = 1.0,
         synchronization_criterion: str = 'interval',
         early_stopping_criterion: Callable[[CBO], bool] = None,
         verbose: bool = True,
@@ -23,6 +24,7 @@ class DistributedCBO:
 
         self.dynamics = [CBO(batch_args=None, M=1, **kwargs) for _ in range(num_agent_batches)]
         self.synchronization_interval = synchronization_interval
+        self.alpha = alpha
         self.early_stopping_criterion = early_stopping_criterion
         self.verbose = verbose
 
@@ -32,7 +34,7 @@ class DistributedCBO:
         self._sync_methods = {
             'mean': self._synchronize_mean,
             'running_mean': self._synchronize_running_mean,
-            # TODO: weighted mean, ...
+            'weighted_mean': self._synchronize_weighted_mean,
         }
         assert synchronization_method in self._sync_methods, f"Invalid synchronization method: {synchronization_method}"
         self._synchronize = self._sync_methods[synchronization_method]
@@ -111,6 +113,25 @@ class DistributedCBO:
 
     def _synchronize_running_mean(self, current_futures: List[Future], all_futures: List[Future]) -> None:
         raise NotImplementedError("Running mean synchronization not implemented yet.")
+    
+
+    def _synchronize_weighted_mean(self, current_futures: List[Future], all_futures: List[Future]) -> None:
+        # Wait for all futures to complete
+        wait(all_futures)
+
+        d = self.dynamics[0].x.shape[-1]
+        all_particles = np.array([dyn.x for dyn in self.dynamics]).reshape(-1, d)
+        all_energies = np.array([dyn.energy for dyn in self.dynamics]).reshape(-1)
+
+        weights = np.exp(-self.alpha * all_energies)
+        consensus_point = np.average(all_particles, weights=weights, axis=0)
+
+        # Update all dynamics with the global consensus point
+        for dynamic in self.dynamics:
+            dynamic.consensus = consensus_point[None, :]
+            dynamic.drift = dynamic.x - dynamic.consensus
+            dynamic.x = dynamic.x - dynamic.correction(dynamic.lamda * dynamic.dt * dynamic.drift) + dynamic.sigma * dynamic.noise()
+
     
 
     def _interval_synchronization(self, **kwargs) -> bool:
