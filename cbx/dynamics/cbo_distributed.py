@@ -54,6 +54,8 @@ class DistributedCBO:
         self.energies: Dict[CBO, float] = {dynamic: None for dynamic in self.dynamics}
         self.consensus_points: Dict[CBO, np.ndarray] = {dynamic: None for dynamic in self.dynamics}
 
+        self.dynamic_mutexes = {dynamic: threading.Lock() for dynamic in self.dynamics}
+
 
     def optimize(self, num_steps: int, sched: scheduler = None) -> None:
         all_futures = []
@@ -103,8 +105,10 @@ class DistributedCBO:
         elif sched == 'default':
             sched = dynamic.default_sched()
 
-        dynamic.step()
-        sched.update(dynamic)
+        # Make sure a single dynamic is not updated concurrently multiple threads
+        with self.dynamic_mutexes[dynamic]:
+            dynamic.step()
+            sched.update(dynamic)
 
         if USE_ASYNC_COMMUNICAION and dynamic.it % self.synchronization_interval == 0:
             consensus, energy = dynamic.consensus, dynamic.energy
@@ -131,8 +135,6 @@ class DistributedCBO:
             dynamic.consensus = consensus_point[None, :]
             dynamic.drift = dynamic.x - dynamic.consensus
             dynamic.x = dynamic.x - dynamic.correction(dynamic.lamda * dynamic.dt * dynamic.drift) + dynamic.sigma * dynamic.noise()
-
-
 
         return dynamic
 
