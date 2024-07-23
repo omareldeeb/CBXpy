@@ -8,8 +8,6 @@ from cbx.scheduler import scheduler
 
 from .cbo import CBO
 
-USE_ASYNC_COMMUNICAION = False
-
 class DistributedCBO:
     def __init__(
         self,
@@ -18,6 +16,7 @@ class DistributedCBO:
         synchronization_method: str = 'mean',
         synchronization_alpha: float = 1.0,
         synchronization_criterion: str = 'interval',
+        use_async_communication: bool = False,
         early_stopping_criterion: Callable[[CBO], bool] = None,
         verbose: bool = True,
         **kwargs
@@ -36,6 +35,7 @@ class DistributedCBO:
         self._num_synchronizations = 0
         self._num_communications = 0
 
+        self.use_async_communication = use_async_communication
         self._sync_methods = {
             'mean': self._synchronize_mean,
             'running_mean': self._synchronize_running_mean,
@@ -73,7 +73,7 @@ class DistributedCBO:
                     wait(all_futures)
                     continue
 
-                if not USE_ASYNC_COMMUNICAION and self._synchronization_criterion():
+                if not self.use_async_communication and self._synchronization_criterion():
                     if self.verbose:
                         print(f"DistCBO: Synchronizing at step {self._num_steps}")
 
@@ -115,7 +115,7 @@ class DistributedCBO:
             dynamic.step()
             sched.update(dynamic)
 
-        if USE_ASYNC_COMMUNICAION and dynamic.it % self.synchronization_interval == 0:
+        if self.use_async_communication and dynamic.it % self.synchronization_interval == 0:
             consensus, energy = dynamic.consensus, dynamic.energy
 
             all_consensus_points = None
@@ -137,9 +137,10 @@ class DistributedCBO:
             consensus_point = np.average(all_consensus_points, weights=weights, axis=0)
 
             # Update current particle's state
-            dynamic.consensus = consensus_point[None, :]
-            dynamic.drift = dynamic.x - dynamic.consensus
-            dynamic.x = dynamic.x - dynamic.correction(dynamic.lamda * dynamic.dt * dynamic.drift) + dynamic.sigma * dynamic.noise()
+            with self.dynamic_mutexes[dynamic]:
+                dynamic.consensus = consensus_point[None, :]
+                dynamic.drift = dynamic.x - dynamic.consensus
+                dynamic.x = dynamic.x - dynamic.correction(dynamic.lamda * dynamic.dt * dynamic.drift) + dynamic.sigma * dynamic.noise()
 
         return dynamic
 
@@ -153,9 +154,10 @@ class DistributedCBO:
 
         # Update all dynamics with the global consensus point
         for dynamic in self.dynamics:
-            dynamic.consensus = consensus_point[None, :]
-            dynamic.drift = dynamic.x - dynamic.consensus
-            dynamic.x = dynamic.x - dynamic.correction(dynamic.lamda * dynamic.dt * dynamic.drift) + dynamic.sigma * dynamic.noise()
+            with self.dynamic_mutexes[dynamic]:
+                dynamic.consensus = consensus_point[None, :]
+                dynamic.drift = dynamic.x - dynamic.consensus
+                dynamic.x = dynamic.x - dynamic.correction(dynamic.lamda * dynamic.dt * dynamic.drift) + dynamic.sigma * dynamic.noise()
 
 
     def _synchronize_running_mean(self, current_futures: List[Future], all_futures: List[Future]) -> None:
@@ -178,9 +180,10 @@ class DistributedCBO:
 
         # Update all dynamics with the global consensus point
         for dynamic in self.dynamics:
-            dynamic.consensus = consensus_point[None, :]
-            dynamic.drift = dynamic.x - dynamic.consensus
-            dynamic.x = dynamic.x - dynamic.correction(dynamic.lamda * dynamic.dt * dynamic.drift) + dynamic.sigma * dynamic.noise()
+            with self.dynamic_mutexes[dynamic]:
+                dynamic.consensus = consensus_point[None, :]
+                dynamic.drift = dynamic.x - dynamic.consensus
+                dynamic.x = dynamic.x - dynamic.correction(dynamic.lamda * dynamic.dt * dynamic.drift) + dynamic.sigma * dynamic.noise()
 
     
 
