@@ -68,6 +68,11 @@ class DistributedCBO:
                 all_futures.extend(current_futures)
                 self._num_steps += 1
 
+                if len(self.dynamics) == 1:
+                    # Single dynamic, no need for synchronization
+                    wait(all_futures)
+                    continue
+
                 if not USE_ASYNC_COMMUNICAION and self._synchronization_criterion():
                     if self.verbose:
                         print(f"DistCBO: Synchronizing at step {self._num_steps}")
