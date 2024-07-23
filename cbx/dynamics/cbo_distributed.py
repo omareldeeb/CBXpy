@@ -8,7 +8,7 @@ from cbx.scheduler import scheduler
 
 from .cbo import CBO
 
-USE_ASYNC_COMMUNICAION = True
+USE_ASYNC_COMMUNICAION = False
 
 class DistributedCBO:
     def __init__(
