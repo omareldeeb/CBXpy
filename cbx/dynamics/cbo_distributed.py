@@ -116,7 +116,8 @@ class DistributedCBO:
             sched.update(dynamic)
 
         if self.use_async_communication and dynamic.it % self.synchronization_interval == 0:
-            consensus, energy = dynamic.consensus, dynamic.energy
+            consensus = dynamic.consensus
+            energy = dynamic.f(consensus)
 
             all_consensus_points = None
             all_energies = None
@@ -134,6 +135,8 @@ class DistributedCBO:
                 all_energies = np.array([self.energies[dynamic] for dynamic in valid_dynamics]).reshape(-1)
 
             weights = np.exp(-self.synchronization_alpha * all_energies)
+            if np.sum(weights) == 0:
+                weights = np.ones_like(weights) / len(weights)
             consensus_point = np.average(all_consensus_points, weights=weights, axis=0)
 
             # Update current particle's state
