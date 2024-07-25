@@ -33,7 +33,6 @@ class DistributedCBO:
 
         self._num_steps = 0
         self._num_synchronizations = 0
-        self._num_communications = 0
 
         self.use_async_communication = use_async_communication
         self._sync_methods = {
@@ -104,6 +103,10 @@ class DistributedCBO:
         return np.min(best_energy)
     
 
+    def num_f_eval(self) -> int:
+        return sum([dynamic.num_f_eval.sum() for dynamic in self.dynamics])
+
+
     def _optimize_instance(self, dynamic: CBO, sched: scheduler = None) -> CBO:
         if sched is None:
             sched = scheduler([])
@@ -122,7 +125,7 @@ class DistributedCBO:
             all_consensus_points = None
             all_energies = None
             with self.global_mutex:
-                self._num_communications += 1
+                self._num_synchronizations += 1
                 # Push the current state to the consensus point
                 self.consensus_points[dynamic] = consensus
                 self.energies[dynamic] = energy
