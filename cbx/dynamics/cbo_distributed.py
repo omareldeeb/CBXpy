@@ -61,8 +61,7 @@ class DistributedCBO:
         current_futures = []
         with ThreadPoolExecutor(max_workers=len(self.dynamics)) as executor:
             for _ in range(num_steps):
-                if self.early_stopping_criterion(self.dynamics):
-                    break
+                # TODO: early stopping check
                 current_futures = [executor.submit(self._optimize_instance, dynamic, sched) for dynamic in self.dynamics]
                 all_futures.extend(current_futures)
                 self._num_steps += 1
