@@ -131,8 +131,9 @@ class DistributedCBO:
         with self.dynamic_mutexes[dynamic]:
             dynamic.step()
             sched.update(dynamic)
+            should_synchronize = dynamic.it % self.synchronization_interval == 0
 
-        if self.use_async_communication and dynamic.it % self.synchronization_interval == 0:
+        if self.use_async_communication and len(self.dynamics) > 1 and should_synchronize:
             consensus = dynamic.consensus
             energy = dynamic.f(consensus)
 
