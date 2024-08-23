@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait, Future
+import math
 from typing import Callable, List, Optional, Dict
 import threading
 
@@ -25,7 +26,18 @@ class DistributedCBO:
             # Stop early if all particles are done
             early_stopping_criterion = lambda dynamics: all([dyn.terminate() for dyn in dynamics])
 
-        self.dynamics = [CBO(batch_args=None, M=1, verbosity=0, **kwargs) for _ in range(num_agent_batches)]
+        if kwargs.get('x') is not None and num_agent_batches > 1:
+            x = kwargs.pop('x')
+            M, N, d = x.shape
+            particles_per_agent_batch = math.ceil(N / num_agent_batches)
+            self.dynamics = []
+            for i in range(num_agent_batches):
+                self.dynamics.append(
+                    CBO(batch_args=None, M=1, verbosity=0, x=x[:, i*particles_per_agent_batch:i*particles_per_agent_batch+particles_per_agent_batch, :],  **kwargs)
+                )
+        else:
+            self.dynamics = [CBO(batch_args=None, M=1, verbosity=0, **kwargs) for _ in range(num_agent_batches)]
+
         self.synchronization_interval = synchronization_interval
         self.synchronization_alpha = synchronization_alpha
         self.early_stopping_criterion = early_stopping_criterion
