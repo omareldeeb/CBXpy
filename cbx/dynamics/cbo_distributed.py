@@ -91,6 +91,9 @@ class DistributedCBO:
                     self._num_synchronizations += 1
                     all_futures = []
 
+        wait(all_futures)
+        [future.result() for future in all_futures]
+        
         best_particle = self.best_particle()
         best_energy = self.best_energy()
         if self.verbose:
@@ -98,7 +101,7 @@ class DistributedCBO:
             print(f"DistCBO: Best particle: {best_particle}, best energy: {best_energy}")
             print(f"DistCBO: Number of function evaluations: {[dyn.num_f_eval for dyn in self.dynamics]}")
 
-        return best_particle 
+        return best_particle
 
 
     def best_particle(self) -> np.ndarray:
