@@ -1,4 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait, Future
+from dataclasses import dataclass
+from enum import Enum
 import math
 from typing import Callable, List, Optional, Dict
 import threading
@@ -9,6 +11,12 @@ from cbx.scheduler import scheduler
 
 from .cbo import CBO
 
+@dataclass
+class CommunicationType(Enum):
+    SYNC = 1
+    ASYNC = 2
+    NONE = 3
+
 class DistributedCBO:
     def __init__(
         self,
@@ -17,7 +25,7 @@ class DistributedCBO:
         synchronization_method: str = 'mean',
         synchronization_alpha: float = 1.0,
         synchronization_criterion: str = 'interval',
-        use_async_communication: bool = False,
+        communication_type: Optional[CommunicationType] = CommunicationType.SYNC,
         early_stopping_criterion: Callable[[CBO], bool] = None,
         verbose: bool = True,
         **kwargs
@@ -46,7 +54,7 @@ class DistributedCBO:
         self._num_steps = 0
         self._num_synchronizations = 0
 
-        self.use_async_communication = use_async_communication
+        self.communication_type = communication_type
         self._sync_methods = {
             'mean': self._synchronize_mean,
             'running_mean': self._synchronize_running_mean,
@@ -83,9 +91,9 @@ class DistributedCBO:
                     wait(all_futures)
                     continue
 
-                if not self.use_async_communication and self._synchronization_criterion():
+                if self.communication_type == CommunicationType.SYNC and self._synchronization_criterion():
                     if self.verbose:
-                        print(f"DistCBO: Synchronizing at step {self._num_steps}")
+                        print(f"DistCBO: Performing synchronized communication at step {self._num_steps}")
 
                     self._synchronize(current_futures, all_futures)
                     self._num_synchronizations += 1
@@ -133,7 +141,7 @@ class DistributedCBO:
             sched.update(dynamic)
             should_synchronize = dynamic.it % self.synchronization_interval == 0
 
-        if self.use_async_communication and len(self.dynamics) > 1 and should_synchronize:
+        if self.communication_type == CommunicationType.ASYNC and len(self.dynamics) > 1 and should_synchronize:
             consensus = dynamic.consensus
             energy = dynamic.f(consensus)
 
