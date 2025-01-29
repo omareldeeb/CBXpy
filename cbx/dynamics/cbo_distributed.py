@@ -30,6 +30,41 @@ class DistributedCBO:
         verbose: bool = True,
         **kwargs
     ) -> None:
+        """
+        Initializes the distributed CBO dynamics.
+
+        Parameters:
+        -----------
+        num_agent_batches : int
+            Number of agent batches to distribute the particles.
+        synchronization_interval : Optional[int], default=50
+            Interval at which communication between agent batches occurs.
+        synchronization_method : str, default='mean'
+            Method used for synchronization. Options are 'mean', 'running_mean', 'weighted_mean'.
+        synchronization_alpha : float, default=1.0
+            Alpha value used in synchronization methods.
+        synchronization_criterion : str, default='interval'
+            Criterion used to determine when synchronization occurs. Currently, only 'interval' is supported.
+        communication_type : Optional[CommunicationType], default=CommunicationType.SYNC
+            Type of communication used between agent batches.
+        early_stopping_criterion : Callable[[CBO], bool], optional
+            Criterion to determine early stopping. If None, defaults to stopping when all particles are done.
+        verbose : bool, default=True
+            If True, enables verbose output.
+        **kwargs : dict
+            Additional keyword arguments passed to the CBO instances.
+
+        Raises:
+        -------
+        AssertionError
+            If the provided synchronization_method or synchronization_criterion is invalid.
+
+        Notes:
+        ------
+        - If 'x' is provided in kwargs and num_agent_batches > 1, the particles are distributed among the agent batches.
+        - Initializes synchronization methods and criteria.
+        - Sets up threading locks for synchronization and energy/consensus point updates.
+        """
         if early_stopping_criterion is None:
             # Stop early if all particles are done
             early_stopping_criterion = lambda dynamics: all([dyn.terminate() for dyn in dynamics])
