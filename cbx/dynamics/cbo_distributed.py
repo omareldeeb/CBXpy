@@ -91,7 +91,7 @@ class DistributedCBO:
                     wait(all_futures)
                     continue
 
-                if self.communication_type == CommunicationType.SYNC and self._synchronization_criterion():
+                if self.communication_type is CommunicationType.SYNC and self._synchronization_criterion():
                     if self.verbose:
                         print(f"DistCBO: Performing synchronized communication at step {self._num_steps}")
 
@@ -141,7 +141,7 @@ class DistributedCBO:
             sched.update(dynamic)
             should_synchronize = dynamic.it % self.synchronization_interval == 0
 
-        if self.communication_type == CommunicationType.ASYNC and len(self.dynamics) > 1 and should_synchronize:
+        if self.communication_type is CommunicationType.ASYNC and len(self.dynamics) > 1 and should_synchronize:
             consensus = dynamic.consensus
             energy = dynamic.f(consensus)
 
