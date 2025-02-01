@@ -4,6 +4,7 @@ from .cbo_memory import CBOMemory
 from .pso import PSO
 from .cbs import CBS
 from .polarcbo import PolarCBO
+from .cbo_distributed import DistributedCBO, CommunicationType
 
 __all__ = ['ParticleDynamic', 
            'CBXDynamic', 
@@ -11,5 +12,7 @@ __all__ = ['ParticleDynamic',
            'CBOMemory', 
            'PSO', 
            'CBS',
-           'PolarCBO']
+           'PolarCBO',
+           'DistributedCBO',
+           'CommunicationType']
 
