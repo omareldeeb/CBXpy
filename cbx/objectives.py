@@ -8,6 +8,7 @@ algorithms.
 """
 
 import numpy as np
+from scipy.stats import multivariate_normal
 from .utils.objective_handling import cbx_objective
     
 #%%
@@ -363,15 +364,19 @@ class Rastrigin(cbx_objective):
 
     """
 
-    def __init__(self, b=0., c=0.):
+    def __init__(self, b=0., c=0., A=10.):
         super().__init__()
         self.b = b
         self.c = c
+        self.A = A
         self.minima = np.array([[self.b, self.b]])
         
     def apply(self, x):
-        return (1/x.shape[-1]) * np.sum((x - self.b)**2 - \
-                10*np.cos(2*np.pi*(x - self.b)) + 10, axis=-1) + self.c
+        return (
+            (self.A * x.shape[-1]) * 
+            ((x - self.b)**2 - self.A * np.cos(2*np.pi*(x - self.b)) + 10).sum(-1) 
+            + self.c
+            )
             
             
 class Rastrigin_multimodal(cbx_objective):
@@ -489,20 +494,21 @@ class Ackley(cbx_objective):
         ax1.set_title('Surface plot')
     """
 
-    def __init__(self, a=20., b=0.2, c=2*np.pi):
+    def __init__(self, A=20., b=0.2, c=2*np.pi, minimum = None):
         super().__init__()
-        self.a=a
+        self.A=A
         self.b=b
         self.c=c
-        self.minima = np.array([[0,0]])
+        self.minima = 0 if minimum is None else minimum
     
     def apply(self, x):
         d = x.shape[-1]
+        x = x - self.minima
         
         arg1 = -self.b * np.sqrt(1/d) * np.linalg.norm(x,axis=-1)
         arg2 = (1/d) * np.sum(np.cos(self.c * x), axis=-1)
         
-        return -self.a * np.exp(arg1) - np.exp(arg2) + self.a + np.e
+        return -self.A * np.exp(arg1) - np.exp(arg2) + self.A + np.e
 
 
 class Ackley_multimodal(cbx_objective):
@@ -640,6 +646,20 @@ class Unimodal(cbx_objective):
         ret = -np.log(0.5*np.exp( -(x[...,0]-a[0])**2/8 - (x[...,1]-a[1])**2/0.5 ))
         
         return ret
+    
+class Multimodal(cbx_objective):
+    def __init__(self, means=None, covs=None):
+        super().__init__()
+        self.means = [np.zeros((2,))] if  means is None else means
+        self.covs  = [np.eye(2)]     if  covs  is None else covs
+        self.mns   = [multivariate_normal(mean=m, cov=c) for m,c in zip(self.means, self.covs)]
+        
+    def apply(self, x):
+        res = 0
+        for mn in self.mns:
+            res += mn.pdf(x)
+        return -np.log(res)
+            
     
 
 class Bukin6(cbx_objective):
@@ -1024,11 +1044,14 @@ class Holder_table(cbx_objective):
 
     """
 
-    def __init__(self):
+    def __init__(self, factor=1., shift= 0):
         super().__init__()
+        self.factor = factor
+        self.shift = shift
         self.minima = np.array([[8.05502, 9.66459], [-8.05502, 9.66459], [8.05502, -9.66459], [-8.05502, -9.66459]])
 
     def apply(self, x):
+        x = (x - self.shift) * self.factor
         return -np.abs(np.sin(x[...,0]) * np.cos(x[...,1]) * np.exp(np.abs(1 - np.sqrt(x[...,0]**2 + x[...,1]**2) / np.pi)))
 
 

@@ -2,7 +2,6 @@ from cbx.dynamics.cbo import CBO
 import pytest
 import numpy as np
 from test_abstraction import test_abstract_dynamic
-from cbx.utils.objective_handling import cbx_objective_fh
 from cbx.utils.termination import max_it_term, energy_tol_term, max_eval_term, max_time_term
 
 class Test_cbo(test_abstract_dynamic):
@@ -91,34 +90,42 @@ class Test_cbo(test_abstract_dynamic):
     def test_step_batched_partial(self, dynamic, f):
         '''Test if partial batched step is correctly performed'''
         x = np.random.uniform(-1,1,(3,5,7))
+        class noise:
+            def __call__(self, dyn):
+                self.s = dyn.sampler(size=dyn.drift.shape) * dyn.drift
+                return self.s
+        N = noise()
 
-        dyn = dynamic(f, x=x, batch_args={'size':2, 'partial':True})
+        dyn = dynamic(f, x=x, noise=N, batch_args={'size':2, 'partial':True})
         dyn.step()
         ind = dyn.particle_idx[1]
         for j in range(x.shape[0]):
             for i in range(ind.shape[1]):
-                x[j, ind[j,i], :] = x[j, ind[j,i], :] - dyn.lamda * dyn.dt * (x[j, ind[j,i], :] - dyn.consensus[j, 0, :]) + dyn.s[j,i,:]
+                x[j, ind[j,i], :] = x[j, ind[j,i], :] -\
+                    dyn.lamda * dyn.dt * (x[j, ind[j,i], :] - dyn.consensus[j, 0, :])\
+                        + dyn.sigma * N.s[j,i,:]
             
         assert np.allclose(dyn.x, x)
         
     def test_torch_handling(self, f, dynamic):
         '''Test if torch is correctly handled'''
         import torch
-        x = torch.zeros((6,5,7))
+        from cbx.utils.torch_utils import to_torch_dynamic
+        x = torch.randn(size=(6,25,3))
         
-        @cbx_objective_fh
+        
         def g(x):
-            return torch.sum(x, dim=-1)
+            return torch.sum(x, dim=-1)**2
+        
         def norm_torch(x, axis, **kwargs):
             return torch.linalg.norm(x, dim=axis, **kwargs)
-        dyn = dynamic(g, x=x, 
-                      max_it = 2,
-                      norm=norm_torch,
-                      copy=torch.clone,
-                      normal=torch.normal,
-                      f_dim='3D')
+
+        dyn = to_torch_dynamic(dynamic)(g,
+                      f_dim = '3D',
+                      x=x,
+                      max_it=15,)
         dyn.optimize()
-        assert dyn.x.shape == (6,5,7)
+        assert dyn.x.shape == x.shape and (dyn.x is not x)
         
     def test_update_best_cur_particle(self, f, dynamic):
         x = np.zeros((5,3,2))

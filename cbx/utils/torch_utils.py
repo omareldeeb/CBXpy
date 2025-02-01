@@ -27,26 +27,95 @@ def requires_torch(f):
 
 @requires_torch
 def norm_torch(x, axis, **kwargs):
-    return torch.linalg.norm(x, dim=axis, **kwargs)  
+    return torch.linalg.vector_norm(x, dim=axis, **kwargs)  
 
 @requires_torch
 def compute_consensus_torch(energy, x, alpha):
     weights = - alpha * energy
-    coeffs = torch.exp(weights - logsumexp(weights, dim=(-1,), keepdims=True))[...,None]
-    return (x * coeffs).sum(axis=1, keepdims=True), energy.detach().cpu().numpy()
+    coeff_expan = tuple([Ellipsis] + [None for i in range(x.ndim-2)])
+    coeffs = torch.exp(weights - logsumexp(weights, dim=-1, keepdims=True))[coeff_expan]
+    return (x * coeffs).sum(axis=1, keepdims=True), energy.cpu().numpy()
 
 @requires_torch
 def compute_polar_consensus_torch(energy, x, neg_log_eval, alpha = 1., kernel_factor = 1.):
     weights = -kernel_factor * neg_log_eval - alpha * energy[:,None,:]
-    coeffs = torch.exp(weights - torch.logsumexp(weights, dim=(-1,), keepdims=True))[...,None]
-    c = torch.sum(x[:,None,...] * coeffs, axis=-2)
+    coeff_expan = tuple([Ellipsis] + [None for i in range(x.ndim-2)])
+    coeffs = torch.exp(weights - torch.logsumexp(weights, dim=(-1,), keepdims=True))[coeff_expan]
+    c = torch.sum(x[:,None,...] * coeffs, axis=2)
     return c, energy.detach().cpu().numpy()
 
 @requires_torch
-def normal_torch(device):
-    def _normal_torch(mean, std, size):
-        return torch.normal(mean, std, size).to(device)
+def exponential_torch(device):
+    def _exponential_torch(size=None):
+        x = torch.distributions.Exponential(1.0).sample(
+                size
+        )
+        sign = torch.randint(0, 2, size) * 2 - 1
+        x: torch.Tensor = x* sign
+        return x.to(device)
+    return _exponential_torch
+
+@requires_torch
+class post_process_default_torch:
+    """
+    Default post processing.
+
+    This function performs some operations on the particles, after the inner step. 
+
+    Parameters:
+        None
+
+    Return:
+        None
+    """
+    def __init__(self, max_thresh: float = 1e8):
+        self.max_thresh = max_thresh
+    
+    def __call__(self, dyn):
+        dyn.x = torch.nan_to_num(dyn.x, nan=self.max_thresh)
+        dyn.x = torch.clamp(dyn.x, min=-self.max_thresh, max=self.max_thresh)
+
+@requires_torch
+def standard_normal_torch(device):
+    def _normal_torch(size=None):
+        return torch.randn(size=size).to(device)
     return _normal_torch
+
+def set_post_process_torch(self, post_process):
+    self.post_process = post_process if post_process is not None else post_process_default_torch()
+
+def set_array_backend_funs_torch(self, copy, norm, sampler):
+    self.copy = copy if copy is not None else torch.clone
+    self.norm = norm if norm is not None else norm_torch
+    self.sampler = sampler if sampler is not None else standard_normal_torch(self.device)
+    
+def init_particles(self, shape=None,):
+    return torch.zeros(size=shape).uniform_(-1., 1.)
+
+def init_consensus(self, compute_consensus):
+    self.consensus = None #consensus point
+    self._compute_consensus = compute_consensus if compute_consensus is not None else compute_consensus_torch
+
+def to_numpy(self, x):
+    return x.detach().cpu().numpy()
+
+def to_torch_dynamic(dyn_cls):
+    def add_device_init(self, *args, device='cpu', **kwargs):
+        self.device = device
+        dyn_cls.__init__(self, *args, **kwargs)
+        
+    return type(dyn_cls.__name__ + str('_torch'), 
+         (dyn_cls,), 
+         dict(
+             __init__ = add_device_init,
+             set_array_backend_funs=set_array_backend_funs_torch,
+             init_particles=init_particles,
+             init_consensus=init_consensus,
+             set_post_process = set_post_process_torch,
+             to_numpy = to_numpy
+             )
+         )
+
 
 @requires_torch
 def eval_model(x, model, w, pprop):
@@ -113,4 +182,4 @@ class effective_sample_size:
             self.minimum * np.ones((dyn.M,)), self.maximum * np.ones((dyn.M,)), 
             max_it = self.solve_max_it, thresh=1e-2
         )
-        setattr(dyn, self.name, torch.tensor(val[:, None], device=device))
+        setattr(dyn, self.name, torch.tensor(val[:, None], device=device, dtype = dyn.x.dtype))

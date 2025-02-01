@@ -1,13 +1,18 @@
 #%%
 from ..noise import get_noise
 from ..correction import get_correction
-from ..scheduler import scheduler, multiply
-from ..utils.termination import max_it_term
-from ..utils.history import track_x, track_energy, track_update_norm, track_consensus, track_drift, track_drift_mean
-from ..utils.particle_init import init_particles
+from ..scheduler import scheduler, multiply, effective_sample_size
+from ..utils.termination import max_it_term, select_term
+from ..utils.history import (
+    track_x, track_energy, 
+    track_update_norm, track_consensus, track_drift, track_drift_mean,
+    default_track
+    )
 from cbx.utils.objective_handling import _promote_objective
+from warnings import warn
 
 #%%
+from pprint import pformat
 from typing import Callable, Union, List
 from numpy.typing import ArrayLike
 import numpy as np
@@ -112,8 +117,8 @@ class ParticleDynamic:
         A callable that copies an array. The default is ``np.copy``.
     norm : Callable
         A callable that computes the norm of an array. The default is ``np.linalg.norm``.
-    normal : Callable
-        A callable that generates an array of random numbers that are distributed according to a normal distribution. The default is ``np.random.normal``.
+    sampler : Callable
+        A callable that generates an array of random numbers. The default is ``np.random.normal``.
 
     verbosity : int, optional
         The verbosity level. The default is 1.
@@ -126,7 +131,6 @@ class ParticleDynamic:
             f_dim: str = '1D',
             check_f_dims: bool = True,
             x: Union[None, np.ndarray] = None,
-            x_min: float = -1., x_max: float = 1.,
             M: int = 1, N: int = 20, d: int = None,
             max_it: int = 1000,
             term_criteria: List[Callable] = None,
@@ -134,25 +138,25 @@ class ParticleDynamic:
             verbosity: int = 1,
             copy: Callable = None,
             norm: Callable = None,
-            normal: Callable = None,
+            sampler: Callable = None,
             post_process: Callable = None,
+            seed: int = None
             ) -> None:
         
         self.verbosity = verbosity
+        self.seed = seed
         
-        # set utilities
-        self.copy = copy if copy is not None else np.copy 
-        self.norm = norm if norm is not None else np.linalg.norm
-        self.normal = normal if normal is not None else np.random.normal
-        
+        # set array backend funs
+        self.set_array_backend_funs(copy, norm, sampler)
+
         # init particles    
-        self.init_x(x, M, N, d, x_min, x_max)
+        self.init_x(x, M, N, d)
         
         # set and promote objective function
         self.init_f(f, f_dim, check_f_dims)
 
         self.energy = float('inf') * np.ones((self.M,self.N)) # energy of the particles
-        self.best_energy = float('inf') * np.ones(self.M,)
+        self.best_energy, self.best_cur_energy = [float('inf') * np.ones(self.M,) for _ in [0,1]]
         self.best_particle = self.copy(self.x[:, 0, :])
         self.update_diff = float('inf') * np.ones((self.M,))
 
@@ -163,9 +167,18 @@ class ParticleDynamic:
         self.init_history(track_args)
         
         # post processing
-        self.post_process = post_process if post_process is not None else post_process_default
+        self.set_post_process(post_process)
+        
+    def set_post_process(self, post_process):
+        self.post_process = post_process if post_process is not None else post_process_default()
 
-    def init_x(self, x, M, N, d, x_min, x_max):
+    def set_array_backend_funs(self, copy, norm, sampler):
+        self.copy = copy if copy is not None else np.copy 
+        self.norm = norm if norm is not None else np.linalg.norm
+        rng = np.random.default_rng(self.seed)
+        self.sampler = sampler if sampler is not None else rng.standard_normal
+        
+    def init_x(self, x, M, N, d):
         """
         Initialize the particle system with the given parameters.
 
@@ -184,22 +197,22 @@ class ParticleDynamic:
         if x is None:
             if d is None:
                 raise RuntimeError('If the inital partical system is not given, the dimension d must be specified!')
-            x = init_particles(
-                    shape=(M, N, d), 
-                    x_min = x_min, x_max = x_max
-                )
+            self.x = self.init_particles(shape=(M, N, d))
+            
         else: # if x is given correct shape
-            if len(x.shape) == 1:
+            if x.ndim == 1:
                 x = x[None, None, :]
-            elif len(x.shape) == 2:
-                x = x[None, :]
+            elif x.ndim == 2:
+                x = x[None, ...]
+            self.x = self.copy(x)
         
-        self.M = x.shape[0]
-        self.N = x.shape[1]
-        self.d = x.shape[2:]
-        self.ddims = tuple(i for i in range(2, x.ndim))
-        self.x = self.copy(x)
+        self.M, self.N = self.x.shape[:2]
+        self.d = self.x.shape[2:]
+        self.ddims = tuple(i for i in range(2, self.x.ndim))
         
+        
+    def init_particles(self, shape=None):
+        return np.random.uniform(-1., 1., size=shape)
 
     def init_f(self, f, f_dim, check_f_dims):
         self.f = _promote_objective(f, f_dim)
@@ -219,7 +232,7 @@ class ParticleDynamic:
             None
         """
         if check: # check if f returns correct shape
-            x = self.normal(0., 1., self.x.shape)
+            x = self.sampler(size=self.x.shape)
             if self.f(x).shape != (self.M,self.N):
                 raise ValueError("The given objective function does not return the correct shape!")
             self.num_f_eval += self.N * np.ones((self.M,), dtype=int) # number of function evaluations
@@ -340,6 +353,8 @@ class ParticleDynamic:
             sched = scheduler([])
         elif sched == 'default':
             sched = self.default_sched()
+        elif sched == 'effective':
+            sched = effective_sample_size()
         else:
             self.sched = sched
 
@@ -409,7 +424,11 @@ class ParticleDynamic:
             checks : list
 
         """
-        self.term_criteria = term_criteria if term_criteria is not None else [max_it_term(max_it)]
+        if term_criteria is None:
+            self.term_criteria = [max_it_term(max_it)]
+        else:
+            self.term_criteria = [select_term(term) for term in term_criteria]
+
         self.term_reason = [None for i in range((self.M))]
         self.active_runs_idx = np.arange(self.M)
         self.num_active_runs = self.M
@@ -467,9 +486,14 @@ class ParticleDynamic:
             if key in self.known_tracks.keys():
                 self.tracks.append(self.known_tracks[key]())
             else:
-                raise RuntimeError('Unknown tracking key ' + key + ' specified!' +
-                        ' You can choose from the following keys '+ 
-                        str(self.known_tracks.keys()))
+                warn(
+                    'Unknown tracking key ' + key + ' specified!' +
+                    ' The following keys are known by default: ' + 
+                    str(self.known_tracks.keys()) + 
+                    '\n Using the default tracker instead',
+                    stacklevel=2
+                )
+                self.tracks.append(default_track(key))
             
         for track in self.tracks:
             track.init_history(self)
@@ -522,6 +546,21 @@ class ParticleDynamic:
         if len(idx) > 0:
             self.best_energy[idx] = self.best_cur_energy[idx]
             self.best_particle[idx, :] = self.copy(self.best_cur_particle[idx, :])
+
+    def to_numpy(self, x):
+        """
+        Given any array-like structure, this should return the numpy version of it.
+        In the default setup, where numpy is the array-backend this is the identity.
+        """
+        return x
+    
+    print_vars = [
+        'M', 'N', 'd',
+    ]
+    
+    def __repr__(self):
+        v_dict = {k:getattr(self,k) for k in self.print_vars}
+        return str(type(self)) + '\n' + pformat(v_dict, indent=4, width=1)
               
 def compute_mat_sqrt(A):
     """
@@ -535,7 +574,7 @@ def compute_mat_sqrt(A):
     """
     B, V = np.linalg.eigh(A)
     B = np.maximum(B,0.)
-    return V@(np.sqrt(B)[...,None]*V.transpose(0,2,1))
+    return V@(np.sqrt(B)[...,None]*np.moveaxis(V, -1, -2))
 
 class compute_consensus_default:
     def __init__(self, check_coeffs = False):
@@ -617,15 +656,17 @@ class CBXDynamic(ParticleDynamic):
         self.set_noise(noise)
         
         self.init_batch_idx(batch_args)
-        
-        self.consensus = None #consensus point
-        self._compute_consensus = compute_consensus if compute_consensus is not None else compute_consensus_default()
+        self.init_consensus(compute_consensus)
         
     known_tracks = {
         'consensus': track_consensus,
         'drift_mean': track_drift_mean,
         'drift': track_drift,
         **ParticleDynamic.known_tracks,}
+    
+    def init_consensus(self, compute_consensus):
+        self.consensus = None #consensus point
+        self._compute_consensus = compute_consensus if compute_consensus is not None else compute_consensus_default()
     
     def init_alpha(self, alpha):
         '''
@@ -829,7 +870,7 @@ class CBXDynamic(ParticleDynamic):
         """
         # set noise model
         if isinstance(noise, str):
-            self.noise_callable = get_noise(noise, norm=self.norm, sampler=self.normal)
+            self.noise_callable = get_noise(noise, self)
         elif callable(noise):
             self.noise_callable = noise
         else:
@@ -877,12 +918,12 @@ class CBXDynamic(ParticleDynamic):
         pass
         
     def post_step(self):
+        self.post_process(self)
         if hasattr(self, 'x_old'):
             self.update_diff = self.norm(self.x - self.x_old, axis=(-2,-1))/self.N
         
         self.update_best_cur_particle()
         self.update_best_particle()
-        self.post_process(self)
         self.track()
             
         self.t += self.dt
@@ -920,7 +961,12 @@ class CBXDynamic(ParticleDynamic):
         # evaluation of objective function on batch
         
         energy = self.eval_f(self.x[self.consensus_idx]) # update energy
-        return self._compute_consensus(energy, self.x[self.consensus_idx], self.alpha[self.active_runs_idx, :])
+        self.consensus, energy = self._compute_consensus(
+            energy, self.x[self.consensus_idx], 
+            self.alpha[self.active_runs_idx, :]
+        )
+        self.energy[self.consensus_idx] = energy
         
         
+    print_vars = ['dt', 'lamda', 'sampler'] + ParticleDynamic.print_vars
     
